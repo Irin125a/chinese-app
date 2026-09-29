@@ -273,34 +273,66 @@ async function openWordModal(id) {
 
 // ==================== ИМПОРТ / ЭКСПОРТ ====================
 async function importWords() {
-  const text = prompt('Вставь строки в формате:\nиероглиф|пиньинь|перевод\n\nКаждая строка — одно слово.');
-  if (!text) return;
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  let added = 0, skipped = 0, dup = 0;
-  const now = Date.now();
-  for (const line of lines) {
-    const parts = line.split('|').map(s => s.trim());
-    if (parts.length < 3) { skipped++; continue; }
-    const [hz, py, tr] = parts;
-    if (allWords.find(x => x.hz === hz)) { dup++; continue; }
-    await dbAdd('words', { hz, py, tr, srsLevel: 0, dueAt: now, createdAt: now });
-    added++;
-  }
-  await loadWords();
-  renderList();
-  alert(`Добавлено: ${added}\nДубликатов: ${dup}\nПропущено (неверный формат): ${skipped}`);
-}
+  const root = document.getElementById('modalRoot');
+  root.innerHTML = `
+    <div class="modal-bg" id="modalBg">
+      <div class="modal">
+        <h2>Импорт слов</h2>
+        <label>Вариант 1: выбрать файл (.txt)</label>
+        <input type="file" id="impFile" accept=".txt,.csv,text/plain" style="width:100%;padding:8px;">
+        <label style="margin-top:18px;">Вариант 2: вставить текст</label>
+        <textarea id="impText" placeholder="иероглиф|пиньинь|перевод&#10;иероглиф|пиньинь|перевод" style="min-height:140px;"></textarea>
+        <div class="error hidden" id="impErr"></div>
+        <div class="row">
+          <button class="btn-secondary" id="impCancel">Отмена</button>
+          <button class="btn-primary" id="impGo">Импортировать</button>
+        </div>
+      </div>
+    </div>
+  `;
+  const close = () => root.innerHTML = '';
+  document.getElementById('modalBg').addEventListener('click', e => {
+    if (e.target.id === 'modalBg') close();
+  });
+  document.getElementById('impCancel').addEventListener('click', close);
 
-async function exportWords() {
-  const words = await dbGetAll('words');
-  const text = words.map(w => `${w.hz}|${w.py}|${w.tr}`).join('\n');
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'chinese_words_export.txt';
-  a.click();
-  URL.revokeObjectURL(url);
+  document.getElementById('impGo').addEventListener('click', async () => {
+    const err = document.getElementById('impErr');
+    err.classList.add('hidden');
+    let text = document.getElementById('impText').value;
+
+    // Если выбран файл — читаем его
+    const fileInput = document.getElementById('impFile');
+    if (fileInput.files && fileInput.files[0]) {
+      text = await fileInput.files[0].text();
+    }
+
+    if (!text || !text.trim()) {
+      err.textContent = 'Нет данных для импорта';
+      err.classList.remove('hidden');
+      return;
+    }
+
+    // Разбиваем по любым переносам строк (универсально)
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    let added = 0, skipped = 0, dup = 0;
+    const now = Date.now();
+    const existingHz = new Set(allWords.map(w => w.hz));
+
+    for (const line of lines) {
+      const parts = line.split('|').map(s => s.trim());
+      if (parts.length < 3 || !parts[0]) { skipped++; continue; }
+      const [hz, py, tr] = parts;
+      if (existingHz.has(hz)) { dup++; continue; }
+      await dbAdd('words', { hz, py, tr, srsLevel: 0, dueAt: now, createdAt: now });
+      existingHz.add(hz);
+      added++;
+    }
+    await loadWords();
+    renderList();
+    close();
+    alert(`Добавлено: ${added}\\nДубликатов: ${dup}\\nПропущено (неверный формат): ${skipped}`);
+  });
 }
 
 // ==================== НАСТРОЙКИ (UI) ====================
