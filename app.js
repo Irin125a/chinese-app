@@ -90,7 +90,6 @@ async function saveSettings(patch) {
 }
 
 // ==================== SRS ====================
-// Интервалы в днях: 1 → 3 → 7 → 14 → 30
 const SRS_INTERVALS = [1, 3, 7, 14, 30];
 
 function nextDue(word, remembered) {
@@ -119,7 +118,7 @@ function formatDate(ts) {
     + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 
-// ==================== РЕНДЕР СПИСКА ====================
+// ==================== СПИСОК ====================
 let allWords = [];
 let searchQuery = '';
 
@@ -160,7 +159,7 @@ function renderList() {
   });
 }
 
-// ==================== МОДАЛКА СЛОВА ====================
+// ==================== КАРТОЧКА СЛОВА ====================
 async function openWordModal(id) {
   const word = id ? await dbGet('words', id) : null;
   const notes = id ? (await dbGetAll('notes')).filter(n => n.wordId === id).sort((a,b)=>b.createdAt-a.createdAt) : [];
@@ -222,13 +221,7 @@ async function openWordModal(id) {
         return;
       }
       const now = Date.now();
-      const newWord = {
-        hz, py, tr,
-        srsLevel: 0,
-        dueAt: now, // сразу доступно к повторению
-        createdAt: now,
-      };
-      await dbAdd('words', newWord);
+      await dbAdd('words', { hz, py, tr, srsLevel: 0, dueAt: now, createdAt: now });
     } else {
       w.py = py; w.tr = tr;
       await dbPut('words', w);
@@ -271,7 +264,7 @@ async function openWordModal(id) {
   }
 }
 
-// ==================== ИМПОРТ / ЭКСПОРТ ====================
+// ==================== ИМПОРТ ====================
 async function importWords() {
   const root = document.getElementById('modalRoot');
   root.innerHTML = `
@@ -301,7 +294,6 @@ async function importWords() {
     err.classList.add('hidden');
     let text = document.getElementById('impText').value;
 
-    // Если выбран файл — читаем его
     const fileInput = document.getElementById('impFile');
     if (fileInput.files && fileInput.files[0]) {
       text = await fileInput.files[0].text();
@@ -313,7 +305,6 @@ async function importWords() {
       return;
     }
 
-    // Разбиваем по любым переносам строк (универсально)
     const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     let added = 0, skipped = 0, dup = 0;
     const now = Date.now();
@@ -332,6 +323,56 @@ async function importWords() {
     renderList();
     close();
     alert(`Добавлено: ${added}\\nДубликатов: ${dup}\\nПропущено (неверный формат): ${skipped}`);
+  });
+}
+
+// ==================== ЭКСПОРТ ====================
+async function exportWords() {
+  const words = await dbGetAll('words');
+  if (!words.length) {
+    alert('Список пуст');
+    return;
+  }
+  const text = words.map(w => `${w.hz}|${w.py || ''}|${w.tr || ''}`).join('\n');
+
+  // Модалка с текстом — работает всегда
+  const root = document.getElementById('modalRoot');
+  root.innerHTML = `
+    <div class="modal-bg" id="modalBg">
+      <div class="modal">
+        <h2>Экспорт (${words.length} слов)</h2>
+        <p style="color:#666;font-size:13px;">Выдели весь текст (кнопка ниже или Ctrl+A) и скопируй. Или скачай файл.</p>
+        <textarea id="expText" style="width:100%;min-height:200px;font-family:monospace;font-size:12px;">${escapeHtml(text)}</textarea>
+        <div class="row">
+          <button class="btn-secondary" id="expSelect">Выделить всё</button>
+          <button class="btn-primary" id="expDownload">Скачать .txt</button>
+        </div>
+        <div class="row">
+          <button class="btn-secondary" id="expClose" style="flex:1;">Закрыть</button>
+        </div>
+      </div>
+    </div>
+  `;
+  const close = () => root.innerHTML = '';
+  document.getElementById('modalBg').addEventListener('click', e => {
+    if (e.target.id === 'modalBg') close();
+  });
+  document.getElementById('expClose').addEventListener('click', close);
+  document.getElementById('expSelect').addEventListener('click', () => {
+    const ta = document.getElementById('expText');
+    ta.focus();
+    ta.select();
+  });
+  document.getElementById('expDownload').addEventListener('click', () => {
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'chinese_words_export.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 }
 
@@ -381,16 +422,6 @@ async function openSettings() {
 }
 
 // ==================== УВЕДОМЛЕНИЯ ====================
-// PWA: setInterval в service worker не работает надёжно.
-// Используем комбинацию: при открытии приложения планируем следующий показ,
-// плюс service worker получает сообщение через postMessage и показывает
-// уведомление по таймеру, пока жив (обычно живёт недолго в фоне).
-// Реально надёжный способ для PWA — периодическая синхронизация
-// (Periodic Background Sync), но она поддерживается не везде.
-// Поэтому делаем так: при каждом открытии приложения ставим "будильник"
-// через setTimeout на ближайший час, и записываем в настройки.
-// Если приложение закрыто — уведомление придёт при следующем открытии.
-
 let notifyTimer = null;
 
 async function scheduleNextNotification() {
@@ -400,7 +431,6 @@ async function scheduleNextNotification() {
   const hour = now.getHours();
   if (hour < s.hourStart || hour >= s.hourEnd) return;
 
-  // Уведомление раз в час: вычислим, сколько осталось до следующего "ровного" часа
   const next = new Date(now);
   next.setMinutes(0, 0, 0);
   next.setHours(next.getHours() + 1);
@@ -416,7 +446,6 @@ async function showRandomWordNotification() {
   if (Notification.permission !== 'granted') return;
   const words = await dbGetAll('words');
   if (!words.length) return;
-  // Приоритет: слова, у которых dueAt <= now
   const now = Date.now();
   const due = words.filter(w => (w.dueAt || 0) <= now);
   const pool = due.length ? due : words;
@@ -432,7 +461,6 @@ async function showRandomWordNotification() {
   await saveSettings({ lastNotifiedWordId: word.id, lastNotifyTime: Date.now() });
 }
 
-// Клик по уведомлению — открыть карточку слова
 navigator.serviceWorker.addEventListener('message', e => {
   if (e.data && e.data.type === 'notification-click') {
     openWordModal(e.data.wordId);
@@ -454,20 +482,16 @@ async function init() {
   document.getElementById('exportBtn').addEventListener('click', exportWords);
   document.getElementById('settingsBtn').addEventListener('click', openSettings);
 
-  // Регистрируем SW
   if ('serviceWorker' in navigator) {
     try {
       await navigator.serviceWorker.register('sw.js');
     } catch (e) { console.warn('SW reg failed', e); }
   }
 
-  // Запрашиваем разрешение (если ещё не дано)
   if ('Notification' in window && Notification.permission === 'default') {
-    // Не сразу, а через 3 секунды после старта
     setTimeout(() => Notification.requestPermission(), 3000);
   }
 
-  // Планируем уведомления и обновляем при возврате в приложение
   scheduleNextNotification();
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) scheduleNextNotification();
